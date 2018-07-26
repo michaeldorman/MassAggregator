@@ -1,0 +1,156 @@
+---
+output: github_document
+---
+
+# Rate calculation example
+
+This is an R script of a reproducible example for mass aggregation of scientific data, as described in - 
+
+> "Robust mass aggregation-based bedload flux prediction in flash flood conditions using an acoustic sensor" by Eran Halfi, Dror Paz, Kyle Stark, Ian Reid, Michael Dorman, Jonathan B. Laronne
+
+Usage: replace the sample CSV file `bedload_mass_calibration_example.csv` file with a different one, following this structure. 
+
+```
+##                  date   weight level  Hp
+## 1 2013-12-11 23:58:00 0.029397   0.0 0.0
+## 2 2013-12-11 23:58:30 0.271035   0.2 0.1
+## 3 2013-12-11 23:59:00 0.626709   0.4 0.1
+## 4 2013-12-11 23:59:30 1.008832   0.4 0.1
+## 5 2013-12-12 00:00:00 1.303752   0.3 0.1
+## 6 2013-12-12 00:00:30 1.673890   0.4 0.1
+```
+
+## Reading data
+
+```{r}
+# Read file
+dat = read.csv("bedload_mass_calibration_example.csv", skip = 1, stringsAsFactors = FALSE)
+head(dat)
+
+# Selecting relevant columns
+dat = data.frame(
+  date = dat[, 1],
+  weight = dat[, 2],
+  level = dat[, 3],
+  Hp = dat[, 4]
+)
+head(dat)
+
+# Filtering empty incomplete rows
+dat = dat[complete.cases(dat), ]
+
+# Formatting date-time
+dat$date = as.POSIXlt(paste0(dat$date, ".00"), format = "%m/%d/%Y %H:%M:%S") 
+```
+
+## Rate calculation 
+
+```{r}
+# Set threshold
+threshold = 4
+
+# Consecutive differences
+dat$change = c(0, diff(dat$weight))
+head(dat)
+
+# Cumulative differences, reset when threshold passed
+dat$cumulative = NA
+dat$cumulative[1] = 0
+for(i in 2:nrow(dat)) {
+  dat$cumulative[i] = ifelse(
+    dat$cumulative[i-1] >= threshold, 
+    dat$change[i], 
+    dat$change[i] + dat$cumulative[i-1] 
+    )
+}
+head(dat)
+
+# Mark change points
+dat$index = dat$cumulative > threshold
+head(dat)
+
+# Cumulative 'level' and 'Hp', with reset at change points
+dat$level2 = NA
+dat$Hp2 = NA
+dat$Hp2_sum = NA
+steps = which(dat$index)
+for(i in 1:length(steps)) {
+  if(i == 1) {w = 0:steps[i]} else {w = (steps[i-1]+1):steps[i]}  # Window to average
+  dat$level2[steps[i]] = mean(dat$level[w])
+  dat$Hp2[steps[i]] = mean(dat$Hp[w])
+  dat$Hp2_sum[steps[i]] = sum(dat$Hp[w])
+}
+head(dat)
+
+# Remove all rows which do not comprise change points
+dat = dat[dat$index, c("date", "weight", "level2", "Hp2", "Hp2_sum")]
+head(dat)
+
+# Cumulative Hp2
+dat$Hp2_cumulative = cumsum(dat$Hp2)
+head(dat)
+
+# Calculate flux
+dat$change = c(NA, diff(dat$weight))
+dat$difftime = c(NA, as.numeric(diff(as.POSIXlt(dat$date)), unit = "secs"))
+dat$flux = (dat$change / 0.11) / dat$difftime
+head(dat)
+
+# Caculate Hp rate
+dat$Hp2_rate = dat$Hp2 / dat$difftime
+head(dat)
+```
+
+## Graphics
+
+```{r}
+# Plot 1
+fit = lm(Hp2_cumulative ~ weight, dat)
+s = summary(fit)
+title = paste0("R2=", round(s$adj.r.squared, 2))
+plot(Hp2_cumulative ~ weight, dat, main = title)
+abline(fit, col = "red")
+
+# Plot 2
+fit = lm(flux ~ Hp2_rate, dat)
+s = summary(fit)
+title = paste0("R2=", round(s$adj.r.squared, 2))
+plot(flux ~ Hp2_rate, dat, main = title)
+abline(fit, col = "red")
+
+# Plot 3
+fit = lm(Hp2_rate ~ flux, dat)
+s = summary(fit)
+title = paste0("R2=", round(s$adj.r.squared, 2))
+plot(Hp2_rate ~ flux, dat, main = title)
+abline(fit, col = "red")
+
+# Plot 4
+plot(flux ~ as.numeric(date), dat, type = "l", ylim = range(c(dat$level2, dat$flux), na.rm=TRUE))
+points(flux ~ as.numeric(date), dat)
+lines(level2 ~ as.numeric(date), dat, col = "red")
+points(level2 ~ as.numeric(date), dat, col = "red")
+```
+
+## Saving output
+
+```{r}
+write.csv(dat, "result.csv", row.names = FALSE)
+```
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
